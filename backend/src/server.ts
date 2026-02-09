@@ -10,6 +10,8 @@ import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import { Database } from './database/database';
 import { seedDatabase } from './database/seed';
+import { OTPUtil } from './utils/otp.util';
+import { EmailService } from './services/email.service';
 
 // Import routes
 import authRoutes from './routes/auth.routes';
@@ -119,6 +121,20 @@ async function startServer() {
 
         // Seed database
         await seedDatabase();
+
+        // Initialize OTP utility (starts cleanup interval)
+        OTPUtil.initialize();
+        console.log('✅ OTP service initialized');
+
+        // Initialize email service
+        EmailService.initialize();
+        const emailReady = await EmailService.testConnection();
+        if (emailReady) {
+            console.log('✅ Email service initialized and ready');
+        } else {
+            console.warn('⚠️  Email service configured but connection test failed');
+            console.warn('   Please check your EMAIL_* environment variables');
+        }
 
         // Start server
         app.listen(PORT, () => {

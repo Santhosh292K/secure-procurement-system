@@ -8,7 +8,14 @@ import { authenticate } from '../middleware/auth.middleware';
 
 const router = Router();
 
-// Public routes
+// OTP-based authentication routes (recommended)
+router.post('/signup/initiate', AuthController.initiateSignup);
+router.post('/signup/verify', AuthController.verifySignupOTP);
+router.post('/login/initiate', AuthController.initiateLogin);
+router.post('/login/verify', AuthController.verifyLoginOTP);
+router.post('/otp/resend', AuthController.resendOTP);
+
+// Legacy routes (deprecated, kept for backward compatibility)
 router.post('/register', AuthController.register);
 router.post('/login', AuthController.login);
 router.post('/refresh', AuthController.refresh);

@@ -72,6 +72,27 @@ class APIClient {
         return this.client.post('/auth/login', data);
     }
 
+    // OTP-based authentication
+    async initiateSignup(data: any) {
+        return this.client.post('/auth/signup/initiate', data);
+    }
+
+    async verifySignupOTP(tempToken: string, otp: string) {
+        return this.client.post('/auth/signup/verify', { tempToken, otp });
+    }
+
+    async initiateLogin(email: string, password: string) {
+        return this.client.post('/auth/login/initiate', { email, password });
+    }
+
+    async verifyLoginOTP(tempToken: string, otp: string) {
+        return this.client.post('/auth/login/verify', { tempToken, otp });
+    }
+
+    async resendOTP(tempToken: string) {
+        return this.client.post('/auth/otp/resend', { tempToken });
+    }
+
     async getProfile() {
         return this.client.get('/auth/profile');
     }

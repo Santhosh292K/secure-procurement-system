@@ -6,14 +6,19 @@ import Link from 'next/link';
 import { Shield, Mail, Lock, AlertCircle } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
 import { useAuthStore } from '@/store/auth.store';
+import OTPInput from '@/components/auth/OTPInput';
 
 export default function LoginPage() {
     const router = useRouter();
     const setAuth = useAuthStore((state) => state.setAuth);
+    const [step, setStep] = useState<'credentials' | 'otp'>('credentials');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [tempToken, setTempToken] = useState('');
+    const [otp, setOtp] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [resendCooldown, setResendCooldown] = useState(0);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -21,7 +26,27 @@ export default function LoginPage() {
         setLoading(true);
 
         try {
-            const { data } = await apiClient.login({ email, password });
+            const { data } = await apiClient.initiateLogin(email, password);
+            setTempToken(data.tempToken);
+            setStep('otp');
+        } catch (err: any) {
+            setError(err.response?.data?.error || 'Login failed. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleVerifyOTP = async () => {
+        if (otp.length !== 6) {
+            setError('Please enter the complete 6-digit code');
+            return;
+        }
+
+        setError('');
+        setLoading(true);
+
+        try {
+            const { data } = await apiClient.verifyLoginOTP(tempToken, otp);
             setAuth(data.user, data.accessToken, data.refreshToken);
 
             // Redirect based on role
@@ -33,12 +58,118 @@ export default function LoginPage() {
 
             router.push(dashboardPath);
         } catch (err: any) {
-            setError(err.response?.data?.error || 'Login failed. Please try again.');
+            setError(err.response?.data?.error || 'Verification failed. Please try again.');
         } finally {
             setLoading(false);
         }
     };
 
+    const handleResendOTP = async () => {
+        if (resendCooldown > 0) return;
+
+        setError('');
+        setLoading(true);
+
+        try {
+            await apiClient.resendOTP(tempToken);
+            setResendCooldown(60);
+
+            // Countdown timer
+            const interval = setInterval(() => {
+                setResendCooldown((prev) => {
+                    if (prev <= 1) {
+                        clearInterval(interval);
+                        return 0;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
+        } catch (err: any) {
+            setError(err.response?.data?.error || 'Failed to resend OTP');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // OTP Verification screen
+    if (step === 'otp') {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-background p-4">
+                <div className="w-full max-w-md">
+                    {/* Header */}
+                    <div className="text-center mb-8">
+                        <div className="inline-flex items-center justify-center w-16 h-16 bg-primary rounded-2xl mb-4">
+                            <Mail className="w-8 h-8 text-primary-foreground" />
+                        </div>
+                        <h1 className="text-3xl font-bold text-foreground mb-2">Verify Your Login</h1>
+                        <p className="text-muted-foreground">
+                            We&apos;ve sent a 6-digit verification code to
+                        </p>
+                        <p className="text-foreground font-medium mt-1">{email}</p>
+                    </div>
+
+                    {/* OTP Form */}
+                    <div className="bg-card rounded-2xl p-8 shadow-2xl border border-border">
+                        {error && (
+                            <div className="bg-destructive/10 border border-destructive rounded-lg p-4 flex items-start gap-3 mb-6">
+                                <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+                                <p className="text-sm text-destructive">{error}</p>
+                            </div>
+                        )}
+
+                        <div className="space-y-6">
+                            <div>
+                                <label className="block text-sm font-medium text-foreground mb-4 text-center">
+                                    Enter Verification Code
+                                </label>
+                                <OTPInput
+                                    value={otp}
+                                    onChange={setOtp}
+                                    disabled={loading}
+                                    error={!!error}
+                                />
+                            </div>
+
+                            <button
+                                onClick={handleVerifyOTP}
+                                disabled={loading || otp.length !== 6}
+                                className="w-full py-3 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded-lg shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {loading ? 'Verifying...' : 'Verify & Sign In'}
+                            </button>
+
+                            <div className="text-center pt-4 border-t border-border">
+                                <p className="text-muted-foreground text-sm mb-2">
+                                    Didn&apos;t receive the code?
+                                </p>
+                                <button
+                                    onClick={handleResendOTP}
+                                    disabled={loading || resendCooldown > 0}
+                                    className="text-primary hover:text-primary/80 font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed transition"
+                                >
+                                    {resendCooldown > 0
+                                        ? `Resend in ${resendCooldown}s`
+                                        : 'Resend Code'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Back to login */}
+                    <p className="text-center text-muted-foreground text-sm mt-6">
+                        <button
+                            onClick={() => setStep('credentials')}
+                            className="text-primary hover:text-primary/80 transition"
+                        >
+                            ← Back to Login
+                        </button>
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    // Login credentials screen
     return (
         <div className="min-h-screen flex items-center justify-center bg-background p-4">
             <div className="w-full max-w-md">
@@ -104,7 +235,7 @@ export default function LoginPage() {
                             disabled={loading}
                             className="w-full py-3 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded-lg shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {loading ? 'Signing in...' : 'Sign In'}
+                            {loading ? 'Sending Code...' : 'Continue'}
                         </button>
                     </form>
 
@@ -121,7 +252,7 @@ export default function LoginPage() {
                     {/* Sign Up Link */}
                     <div className="mt-6 text-center pt-6 border-t border-border">
                         <p className="text-muted-foreground text-sm">
-                            Don't have an account?{' '}
+                            Don&apos;t have an account?{' '}
                             <Link href="/register" className="text-primary hover:text-primary/80 font-medium transition">
                                 Sign Up
                             </Link>
