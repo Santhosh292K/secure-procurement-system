@@ -19,9 +19,9 @@ export class JWTUtil {
     /**
      * Generate access token
      */
-    static generateAccessToken(payload: TokenPayload): string {
+    static generateAccessToken(payload: TokenPayload, expiresIn?: string): string {
         return jwt.sign(payload, JWT_SECRET, {
-            expiresIn: JWT_EXPIRES_IN
+            expiresIn: expiresIn || JWT_EXPIRES_IN
         } as jwt.SignOptions);
     }
 

@@ -43,7 +43,7 @@ yarn-error.log*
 .vercel
 
 # IDEs
-.vscode/
+.vscode/ 
 .idea/
 *.swp
 *.swo

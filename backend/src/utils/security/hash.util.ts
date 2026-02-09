@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 
 export class HashUtil {
-    private static readonly BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '10');
+    private static readonly BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12');
 
     /**
      * Generate SHA-256 hash

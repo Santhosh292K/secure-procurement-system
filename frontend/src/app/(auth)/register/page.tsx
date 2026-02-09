@@ -39,11 +39,11 @@ export default function RegisterPage() {
 
         try {
             await apiClient.register({
-                name: formData.name,
+                fullName: formData.name,
                 email: formData.email,
                 password: formData.password,
                 role: formData.role,
-                company: formData.company || undefined,
+                companyName: formData.company || undefined,
             });
 
             setSuccess(true);

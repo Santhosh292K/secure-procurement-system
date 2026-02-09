@@ -7,6 +7,7 @@ import { Database } from '../database/database';
 import { HashUtil } from '../utils/security/hash.util';
 import { JWTUtil } from '../utils/jwt.util';
 import { PasswordUtil } from '../utils/security/password.util';
+import { PasswordHistoryUtil } from '../utils/security/password-history.util';
 
 export class AuthController {
     /**
@@ -56,11 +57,14 @@ export class AuthController {
             // Hash password
             const passwordHash = await HashUtil.hashPassword(password);
 
+            // Calculate password expiration date
+            const passwordExpiresAt = PasswordHistoryUtil.calculateExpirationDate();
+
             // Insert user
             const result = await Database.run(
-                `INSERT INTO users (email, password_hash, full_name, role, company_name, phone)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-                [email, passwordHash, fullName, role, companyName || null, phone || null]
+                `INSERT INTO users (email, password_hash, full_name, role, company_name, phone, password_expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [email, passwordHash, fullName, role, companyName || null, phone || null, passwordExpiresAt.toISOString()]
             );
 
             // Generate tokens
@@ -97,6 +101,7 @@ export class AuthController {
     static async login(req: Request, res: Response): Promise<void> {
         try {
             const { email, password } = req.body;
+            const ipAddress = req.ip || req.socket.remoteAddress;
 
             if (!email || !password) {
                 res.status(400).json({ error: 'Email and password required' });
@@ -110,15 +115,112 @@ export class AuthController {
             );
 
             if (!user) {
+                // Log failed login attempt
+                await Database.run(
+                    `INSERT INTO security_events (event_type, severity, ip_address, user_agent, details)
+                     VALUES (?, ?, ?, ?, ?)`,
+                    ['failed_login', 'medium', ipAddress, req.headers['user-agent'], `Failed login for email: ${email}`]
+                );
                 res.status(401).json({ error: 'Invalid credentials' });
                 return;
+            }
+
+            // Check if account is locked
+            if (user.locked_until && new Date(user.locked_until) > new Date()) {
+                const unlockTime = new Date(user.locked_until);
+                const minutesLeft = Math.ceil((unlockTime.getTime() - Date.now()) / 60000);
+                res.status(403).json({
+                    error: 'Account is temporarily locked',
+                    lockedUntil: user.locked_until,
+                    message: `Account locked due to multiple failed login attempts. Try again in ${minutesLeft} minutes.`
+                });
+                return;
+            }
+
+            // Reset lock if time has passed
+            if (user.locked_until && new Date(user.locked_until) <= new Date()) {
+                await Database.run(
+                    'UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?',
+                    [user.id]
+                );
             }
 
             // Verify password
             const isValidPassword = await HashUtil.verifyPassword(password, user.password_hash);
 
             if (!isValidPassword) {
-                res.status(401).json({ error: 'Invalid credentials' });
+                // Increment failed attempts
+                const failedAttempts = (user.failed_login_attempts || 0) + 1;
+                const maxAttempts = 5;
+
+                if (failedAttempts >= maxAttempts) {
+                    // Lock account for 30 minutes
+                    const lockUntil = new Date(Date.now() + 30 * 60 * 1000);
+                    await Database.run(
+                        'UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?',
+                        [failedAttempts, lockUntil.toISOString(), user.id]
+                    );
+
+                    // Log account locked event
+                    await Database.run(
+                        `INSERT INTO security_events (user_id, event_type, severity, ip_address, user_agent, details)
+                         VALUES (?, ?, ?, ?, ?, ?)`,
+                        [user.id, 'account_locked', 'high', ipAddress, req.headers['user-agent'], `Account locked after ${failedAttempts} failed attempts`]
+                    );
+
+                    res.status(403).json({
+                        error: 'Account locked',
+                        message: 'Too many failed login attempts. Account locked for 30 minutes.'
+                    });
+                } else {
+                    await Database.run(
+                        'UPDATE users SET failed_login_attempts = ? WHERE id = ?',
+                        [failedAttempts, user.id]
+                    );
+
+                    // Log failed attempt
+                    await Database.run(
+                        `INSERT INTO security_events (user_id, event_type, severity, ip_address, user_agent, details)
+                         VALUES (?, ?, ?, ?, ?, ?)`,
+                        [user.id, 'failed_login', 'medium', ipAddress, req.headers['user-agent'], `Failed login attempt ${failedAttempts}/${maxAttempts}`]
+                    );
+
+                    res.status(401).json({
+                        error: 'Invalid credentials',
+                        attemptsRemaining: maxAttempts - failedAttempts
+                    });
+                }
+                return;
+            }
+
+            // Reset failed attempts on successful login
+            await Database.run(
+                'UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?',
+                [user.id]
+            );
+
+            // Check password expiration
+            if (user.password_expires_at && new Date(user.password_expires_at) < new Date()) {
+                res.status(403).json({
+                    error: 'Password expired',
+                    message: 'Your password has expired. Please reset your password.',
+                    requiresPasswordChange: true
+                });
+                return;
+            }
+
+            // Check if password expiring soon (within 7 days)
+            const passwordExpiryWarning = user.password_expires_at
+                ? Math.ceil((new Date(user.password_expires_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                : null;
+
+            // Check if MFA is enabled
+            if (user.mfa_enabled) {
+                res.json({
+                    message: 'MFA required',
+                    requires2FA: true,
+                    tempToken: JWTUtil.generateAccessToken({ userId: user.id, email: user.email, role: user.role }, '5m') // 5 minute temp token
+                });
                 return;
             }
 
@@ -132,7 +234,7 @@ export class AuthController {
             const accessToken = JWTUtil.generateAccessToken(payload);
             const refreshToken = JWTUtil.generateRefreshToken(payload);
 
-            res.json({
+            const response: any = {
                 message: 'Login successful',
                 user: {
                     id: user.id,
@@ -143,7 +245,15 @@ export class AuthController {
                 },
                 accessToken,
                 refreshToken
-            });
+            };
+
+            // Add password expiry warning if applicable
+            if (passwordExpiryWarning !== null && passwordExpiryWarning <= 7 && passwordExpiryWarning > 0) {
+                response.passwordExpiringIn = passwordExpiryWarning;
+                response.warning = `Your password will expire in ${passwordExpiryWarning} day(s)`;
+            }
+
+            res.json(response);
         } catch (error) {
             console.error('Login error:', error);
             res.status(500).json({ error: 'Internal server error' });
@@ -219,6 +329,7 @@ export class AuthController {
             }
 
             const { currentPassword, newPassword } = req.body;
+            const ipAddress = req.ip || req.socket.remoteAddress;
 
             if (!currentPassword || !newPassword) {
                 res.status(400).json({ error: 'Current and new password required' });
@@ -251,14 +362,42 @@ export class AuthController {
                 return;
             }
 
+            // Check if password was used before
+            const isReused = await PasswordHistoryUtil.isPasswordReused(req.user.userId, newPassword);
+            if (isReused) {
+                res.status(400).json({
+                    error: 'Password reuse not allowed',
+                    message: 'You cannot reuse any of your last 5 passwords. Please choose a different password.'
+                });
+                return;
+            }
+
+            // Add current password to history
+            await PasswordHistoryUtil.addToHistory(req.user.userId, user.password_hash);
+
             // Hash new password
             const newPasswordHash = await HashUtil.hashPassword(newPassword);
 
-            // Update password
-            await Database.run('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
-                newPasswordHash,
-                req.user.userId
-            ]);
+            // Calculate new expiration date
+            const passwordExpiresAt = PasswordHistoryUtil.calculateExpirationDate();
+
+            // Update password and expiration
+            await Database.run(
+                `UPDATE users 
+                 SET password_hash = ?, 
+                     password_changed_at = CURRENT_TIMESTAMP, 
+                     password_expires_at = ?,
+                     updated_at = CURRENT_TIMESTAMP 
+                 WHERE id = ?`,
+                [newPasswordHash, passwordExpiresAt.toISOString(), req.user.userId]
+            );
+
+            //Log security event
+            await Database.run(
+                `INSERT INTO security_events (user_id, event_type, severity, ip_address, user_agent, details)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [req.user.userId, 'password_changed', 'medium', ipAddress, req.headers['user-agent'], 'Password changed successfully']
+            );
 
             res.json({ message: 'Password changed successfully' });
         } catch (error) {
