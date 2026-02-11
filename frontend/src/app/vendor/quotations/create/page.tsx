@@ -1,13 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import DashboardLayout from '@/components/DashboardLayout';
 import { apiClient } from '@/lib/api-client';
 import { Save, X, Plus, Trash2, AlertCircle } from 'lucide-react';
 
-export default function CreateQuotationPage() {
+function CreateQuotationForm() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const rfqId = searchParams.get('rfqId');
@@ -268,5 +268,24 @@ export default function CreateQuotationPage() {
                 </div>
             </DashboardLayout>
         </ProtectedRoute>
+    );
+}
+
+export default function CreateQuotationPage() {
+    return (
+        <Suspense fallback={
+            <ProtectedRoute allowedRoles={['vendor']}>
+                <DashboardLayout>
+                    <div className="max-w-5xl mx-auto space-y-6">
+                        <div>
+                            <h1 className="text-3xl font-bold text-foreground mb-2">Create Quotation</h1>
+                            <p className="text-muted-foreground">Loading...</p>
+                        </div>
+                    </div>
+                </DashboardLayout>
+            </ProtectedRoute>
+        }>
+            <CreateQuotationForm />
+        </Suspense>
     );
 }

@@ -148,7 +148,7 @@ export function createRateLimiter(config: RateLimitConfig) {
  * Adds increasing delays after repeated failures
  */
 export function progressiveDelay() {
-    return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
         const ip = req.ip || req.socket.remoteAddress || 'unknown';
         const key = `${ip}:${req.path}`;
         const failures = store.getFailedAttempts(key);
